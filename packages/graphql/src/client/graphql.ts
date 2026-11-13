@@ -1258,6 +1258,11 @@ export type LibraryConfig = {
   processThumbnailColorsEvenWithoutConfig: Scalars['Boolean']['output'];
   skipBookOverview: Scalars['Boolean']['output'];
   thumbnailConfig?: Maybe<ImageProcessorOptions>;
+  /**
+   * Whether to use a cover image file (e.g. `cover.jpg`) found in the root of a series
+   * folder as the series thumbnail
+   */
+  useSeriesCoverImage: Scalars['Boolean']['output'];
   watch: Scalars['Boolean']['output'];
 };
 
@@ -1279,6 +1284,7 @@ export type LibraryConfigInput = {
   processThumbnailColorsEvenWithoutConfig: Scalars['Boolean']['input'];
   skipBookOverview: Scalars['Boolean']['input'];
   thumbnailConfig?: InputMaybe<ImageProcessorOptionsInput>;
+  useSeriesCoverImage?: Scalars['Boolean']['input'];
   watch: Scalars['Boolean']['input'];
 };
 
@@ -3494,6 +3500,7 @@ export type PatchLibraryConfigInput = {
   processThumbnailColorsEvenWithoutConfig?: InputMaybe<Scalars['Boolean']['input']>;
   skipBookOverview?: InputMaybe<Scalars['Boolean']['input']>;
   thumbnailConfig?: InputMaybe<ImageProcessorOptionsInput>;
+  useSeriesCoverImage?: InputMaybe<Scalars['Boolean']['input']>;
   watch?: InputMaybe<Scalars['Boolean']['input']>;
 };
 
@@ -6913,7 +6920,7 @@ export type LibrarySeriesGridQueryVariables = Exact<{
 
 export type LibrarySeriesGridQuery = { __typename?: 'Query', series: { __typename?: 'PaginatedSeriesResponse', nodes: Array<{ __typename?: 'Series', id: string, thumbnail: { __typename?: 'ImageRef', url: string } }>, pageInfo: { __typename: 'CursorPaginationInfo', currentCursor?: string | null, nextCursor?: string | null, limit: number } | { __typename: 'OffsetPaginationInfo' } } };
 
-export type LibrarySettingsConfigFragment = { __typename?: 'Library', config: { __typename?: 'LibraryConfig', id: number, convertRarToZip: boolean, hardDeleteConversions: boolean, defaultReadingDir: ReadingDirection, defaultReadingMode: ReadingMode, defaultReadingImageScaleFit: ReadingImageScaleFit, defaultLibraryViewMode: LibraryViewMode, hideSeriesView: boolean, skipBookOverview: boolean, generateFileHashes: boolean, generateKoreaderHashes: boolean, processMetadata: boolean, watch: boolean, libraryPattern: LibraryPattern, libraryType: LibraryType, processThumbnailColorsEvenWithoutConfig: boolean, ignoreRules?: Array<string> | null, oneshotsDirectory?: string | null, thumbnailConfig?: { __typename: 'ImageProcessorOptions', format: SupportedImageFormat, quality?: number | null, page?: number | null, resizeMethod?: { __typename: 'ExactDimensionResize', width: number, height: number } | { __typename: 'FitWithinResize' } | { __typename: 'ScaleEvenlyByFactor', factor: any } | { __typename: 'ScaledDimensionResize', dimension: Dimension, size: number } | null } | null } } & { ' $fragmentName'?: 'LibrarySettingsConfigFragment' };
+export type LibrarySettingsConfigFragment = { __typename?: 'Library', config: { __typename?: 'LibraryConfig', id: number, convertRarToZip: boolean, hardDeleteConversions: boolean, defaultReadingDir: ReadingDirection, defaultReadingMode: ReadingMode, defaultReadingImageScaleFit: ReadingImageScaleFit, defaultLibraryViewMode: LibraryViewMode, hideSeriesView: boolean, skipBookOverview: boolean, generateFileHashes: boolean, generateKoreaderHashes: boolean, processMetadata: boolean, watch: boolean, useSeriesCoverImage: boolean, libraryPattern: LibraryPattern, libraryType: LibraryType, processThumbnailColorsEvenWithoutConfig: boolean, ignoreRules?: Array<string> | null, oneshotsDirectory?: string | null, thumbnailConfig?: { __typename: 'ImageProcessorOptions', format: SupportedImageFormat, quality?: number | null, page?: number | null, resizeMethod?: { __typename: 'ExactDimensionResize', width: number, height: number } | { __typename: 'FitWithinResize' } | { __typename: 'ScaleEvenlyByFactor', factor: any } | { __typename: 'ScaledDimensionResize', dimension: Dimension, size: number } | null } | null } } & { ' $fragmentName'?: 'LibrarySettingsConfigFragment' };
 
 export type LibrarySettingsRouterEditLibraryMutationMutationVariables = Exact<{
   id: Scalars['ID']['input'];
@@ -9158,6 +9165,7 @@ export const LibrarySettingsConfigFragmentDoc = new TypedDocumentString(`
     generateKoreaderHashes
     processMetadata
     watch
+    useSeriesCoverImage
     libraryPattern
     libraryType
     thumbnailConfig {
@@ -14417,6 +14425,7 @@ export const LibraryLayoutDocument = new TypedDocumentString(`
     generateKoreaderHashes
     processMetadata
     watch
+    useSeriesCoverImage
     libraryPattern
     libraryType
     thumbnailConfig {

@@ -6,10 +6,12 @@ use std::{
 
 use apalis::prelude::MemoryStorage;
 use models::entity::{library, library_config, media, series};
+use models::shared::image_processor_options::ImageProcessorOptions;
 use sea_orm::{prelude::*, DatabaseConnection};
 use stump_core::{
 	config::StumpConfig,
 	database::connect_at,
+	image::{ThumbnailGenerationJob, ThumbnailGenerationJobParams},
 	job::{
 		ApalisWorkerState, JobContext, JobLifecycle, JobOutputExt, StumpJob, WorkingState,
 	},
@@ -26,6 +28,8 @@ pub struct TestLibrary {
 	pub state: Arc<ApalisWorkerState>,
 	pub library: library::Model,
 	root: TempDir,
+	/// the config directory (e.g. where thumbnails are written), isolated per test
+	_config_dir: TempDir,
 	// only held so emitted events don't log send errors, we don't really
 	// need it otherwise
 	_events: broadcast::Receiver<CoreEvent>,
@@ -34,6 +38,7 @@ pub struct TestLibrary {
 impl TestLibrary {
 	pub async fn new() -> Self {
 		let root = TempDir::new().expect("failed to create library dir");
+		let config_dir = TempDir::new().expect("failed to create config dir");
 
 		let conn = connect_at("sqlite::memory:")
 			.await
@@ -49,7 +54,10 @@ impl TestLibrary {
 		let (events_tx, events) = broadcast::channel(1024);
 		let state = Arc::new(ApalisWorkerState::new(
 			Arc::new(conn),
-			Arc::new(StumpConfig::debug()),
+			Arc::new(StumpConfig {
+				config_dir: config_dir.path().to_string_lossy().to_string(),
+				..StumpConfig::debug()
+			}),
 			events_tx,
 			MemoryStorage::new(),
 		));
@@ -58,6 +66,7 @@ impl TestLibrary {
 			state,
 			library,
 			root,
+			_config_dir: config_dir,
 			_events: events,
 		}
 	}
@@ -145,6 +154,38 @@ impl TestLibrary {
 			.expect("scan finalize failed");
 
 		output
+	}
+
+	/// runs a series thumbnail generation job for the given series, the same way the scanner's
+	/// follow-up job would (outside of the job system, like [`TestLibrary::scan`]). returns
+	/// any logs emitted by the job
+	pub async fn generate_series_thumbnails(
+		&self,
+		series_ids: Vec<String>,
+		options: ImageProcessorOptions,
+		force_regenerate: bool,
+	) -> Vec<String> {
+		let params = ThumbnailGenerationJobParams::series(series_ids, force_regenerate);
+		let mut job = ThumbnailGenerationJob::new(options.clone(), params.clone());
+		let ctx = JobContext::new(
+			Arc::clone(&self.state),
+			Uuid::new_v4().to_string(),
+			&StumpJob::thumbnail_generation(options, params),
+		)
+		.await
+		.expect("failed to create job context");
+
+		let WorkingState { mut tasks, .. } =
+			job.init(&ctx).await.expect("thumbnail init failed");
+		let mut logs = vec![];
+		while let Some(task) = tasks.pop_front() {
+			let output = job
+				.execute_task(&ctx, task)
+				.await
+				.expect("thumbnail task failed");
+			logs.extend(output.logs.into_iter().map(|log| log.msg));
+		}
+		logs
 	}
 
 	/// rescans the library and asserts nothing changed

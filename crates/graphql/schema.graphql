@@ -1148,6 +1148,11 @@ type LibraryConfig {
 	libraryType: LibraryType!
 	skipBookOverview: Boolean!
 	processThumbnailColorsEvenWithoutConfig: Boolean!
+	"""
+	Whether to use a cover image file (e.g. `cover.jpg`) found in the root of a series
+	folder as the series thumbnail
+	"""
+	useSeriesCoverImage: Boolean!
 	libraryId: String
 	"""
 	the **relative path** to the directory where oneshots are stored,
@@ -1172,6 +1177,7 @@ input LibraryConfigInput {
 	skipBookOverview: Boolean!
 	thumbnailConfig: ImageProcessorOptionsInput
 	processThumbnailColorsEvenWithoutConfig: Boolean!
+	useSeriesCoverImage: Boolean! = true
 	defaultReadingDir: ReadingDirection!
 	defaultReadingMode: ReadingMode!
 	defaultReadingImageScaleFit: ReadingImageScaleFit!
@@ -2530,6 +2536,7 @@ input PatchLibraryConfigInput {
 	skipBookOverview: Boolean
 	thumbnailConfig: ImageProcessorOptionsInput
 	processThumbnailColorsEvenWithoutConfig: Boolean
+	useSeriesCoverImage: Boolean
 	defaultReadingDir: ReadingDirection
 	defaultReadingMode: ReadingMode
 	defaultReadingImageScaleFit: ReadingImageScaleFit

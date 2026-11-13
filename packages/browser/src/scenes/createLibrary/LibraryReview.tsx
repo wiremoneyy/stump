@@ -149,6 +149,15 @@ export default function LibraryReview() {
 				/>
 
 				<ReviewItem
+					label={t(getLabelKey('useSeriesCoverImage'))}
+					value={
+						state.useSeriesCoverImage
+							? translate('shared.common.yes')
+							: translate('shared.common.no')
+					}
+				/>
+
+				<ReviewItem
 					label={t(getLabelKey('convertRar'))}
 					value={
 						state.convertRarToZip ? translate('shared.common.yes') : translate('shared.common.no')

@@ -247,16 +247,7 @@ pub async fn dispatch_job(
 			run_job(&job_ctx, &mut LibraryScanJob::new(id, path, options)).await
 		},
 		StumpJob::SeriesScan { id, path, options } => {
-			run_job(
-				&job_ctx,
-				&mut SeriesScanJob {
-					id,
-					path,
-					config: None,
-					options: options.unwrap_or_default(),
-				},
-			)
-			.await
+			run_job(&job_ctx, &mut SeriesScanJob::new(id, path, options)).await
 		},
 		StumpJob::ThumbnailGeneration { options, params } => {
 			run_job(&job_ctx, &mut ThumbnailGenerationJob { options, params }).await

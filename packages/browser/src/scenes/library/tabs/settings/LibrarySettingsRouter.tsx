@@ -47,6 +47,7 @@ export const LibrarySettingsConfig = graphql(`
 			generateKoreaderHashes
 			processMetadata
 			watch
+			useSeriesCoverImage
 			libraryPattern
 			libraryType
 			thumbnailConfig {

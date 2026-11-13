@@ -53,6 +53,10 @@ pub struct Model {
 	pub thumbnail_config: Option<ImageProcessorOptions>,
 	#[sea_orm(default_value = "false")]
 	pub process_thumbnail_colors_even_without_config: bool,
+	/// Whether to use a cover image file (e.g. `cover.jpg`) found in the root of a series
+	/// folder as the series thumbnail
+	#[sea_orm(default_value = "true")]
+	pub use_series_cover_image: bool,
 	#[sea_orm(column_type = "Json", nullable)]
 	#[graphql(skip)]
 	pub ignore_rules: Option<IgnoreRules>,
@@ -153,6 +157,10 @@ impl ActiveModelBehavior for ActiveModel {
 			.is_not_set()
 		{
 			self.process_thumbnail_colors_even_without_config = Set(false);
+		}
+
+		if self.use_series_cover_image.is_not_set() {
+			self.use_series_cover_image = Set(true);
 		}
 
 		Ok(self)

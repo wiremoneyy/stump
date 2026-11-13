@@ -2,7 +2,7 @@
 title: Thumbnails
 ---
 
-Stump uses thumbnails to display images of your media throughout the app. By default, Stump will pull the first image from a media file to use as a thumbnail. However, you can customize this behavior per-library by configuring the thumbnail generation settings
+Stump uses thumbnails to display images of your media throughout the app. By default, Stump will pull the first image from a media file to use as a thumbnail. However, you can customize this behavior per-library by configuring the thumbnail generation settings, and series can use a [cover image file](#series-cover-files) from their folder
 
 ## Thumbnail Generation
 
@@ -26,6 +26,55 @@ Please note that when thumbnail generation is enabled, you may not opt out of [p
 ### Image Candidacy
 
 When generating thumbnails, Stump will use the very first image it encounters in the media file as the thumbnail.
+
+## Series Cover Files
+
+Series thumbnails are, by default, taken from the first image of the first book in the series. If that image isn't a good cover (e.g. it's a credits page), you can place a cover image file directly in the series folder and Stump will use it instead:
+
+```
+comics/                      <- library root
+  Absolute Necromancer/      <- series
+    cover.webp               <- used as the series thumbnail
+    1/Chapter 0001.cbz
+    2/Chapter 0002.cbz
+```
+
+### Accepted Names
+
+The file name is matched case-insensitively, so `Cover.JPG` works just as well as `cover.jpg`. The accepted base names, in priority order, are:
+
+1. `cover`
+2. `folder`
+3. `poster`
+
+The accepted extensions are `webp`, `jpg`, `jpeg`, `png`, `avif` and `gif`. If more than one file matches, the base name priority wins first (so `cover.png` beats `folder.webp`), and then the extension order above breaks any remaining ties.
+
+Only the series root is checked, i.e. the folder Stump treats as the series. For [collection-priority](/docs/guides/fundamentals/libraries#collection-priority) libraries this is the top-level folder, and for [series-priority](/docs/guides/fundamentals/libraries#series-priority) libraries it is the folder which directly contains the books. Images in nested folders (e.g. chapter folders) are never used. Cover files are only ever a thumbnail source, they are never added to your library as books or pages.
+
+### Precedence
+
+A series thumbnail is chosen in the following order:
+
+1. A thumbnail you manually [selected or uploaded](#thumbnail-selection). This is never overwritten by scans or regeneration
+2. A cover image file in the series folder
+3. The first image of the first book in the series
+
+### Processing
+
+Cover files go through the library's [thumbnail generation](#thumbnail-generation) settings (size, format, quality and placeholder colors) just like any other generated thumbnail. If thumbnail generation is disabled for the library, the cover file is served as-is.
+
+<Callout type="info" title="AVIF">
+	AVIF cover files are always served as-is, since Stump can't currently decode AVIF images for
+	resizing.
+</Callout>
+
+If a cover file can't be read or isn't a valid image, Stump logs a warning and falls back to the first book.
+
+### Changes
+
+Each library or series scan checks for cover file changes. If a cover file is added, replaced (detected by its modified time) or removed, the series thumbnail is updated accordingly. When a cover file is removed, the series falls back to the first book.
+
+This behavior is controlled by the `Use cover image from series folder` option in the library's scanning settings (`/libraries/{libraryId}/settings/scanning`). It is enabled by default. Disabling it and rescanning reverts any thumbnails that came from cover files.
 
 ## Supported Formats
 
@@ -85,6 +134,8 @@ You have the ability to regenerate thumbnails in a given library's settings page
 
 - Generate only missing thumbnails
 - Force regenerate all thumbnails
+
+Force regenerating will refresh any generated thumbnails, including those created from [series cover files](#series-cover-files), but it will never overwrite a thumbnail you manually selected or uploaded.
 
 ### Deletion
 

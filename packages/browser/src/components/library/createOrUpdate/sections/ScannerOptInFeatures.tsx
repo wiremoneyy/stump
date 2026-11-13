@@ -14,7 +14,11 @@ type Props = {
 	onDidChange?: (
 		values: Pick<
 			CreateOrUpdateLibrarySchema,
-			'processMetadata' | 'watch' | 'generateFileHashes' | 'generateKoreaderHashes'
+			| 'processMetadata'
+			| 'watch'
+			| 'generateFileHashes'
+			| 'generateKoreaderHashes'
+			| 'useSeriesCoverImage'
 		>,
 	) => void
 }
@@ -24,10 +28,17 @@ export default function ScannerOptInFeatures({ onDidChange }: Props) {
 	const ctx = useLibraryManagementSafe()
 	const isCreating = !ctx?.library
 
-	const [processMetadata, watch, generateFileHashes, koreaderHashes] = useWatch({
-		control: form.control,
-		name: ['processMetadata', 'watch', 'generateFileHashes', 'generateKoreaderHashes'],
-	})
+	const [processMetadata, watch, generateFileHashes, koreaderHashes, useSeriesCoverImage] =
+		useWatch({
+			control: form.control,
+			name: [
+				'processMetadata',
+				'watch',
+				'generateFileHashes',
+				'generateKoreaderHashes',
+				'useSeriesCoverImage',
+			],
+		})
 
 	const params = useMemo(
 		() => ({
@@ -35,8 +46,9 @@ export default function ScannerOptInFeatures({ onDidChange }: Props) {
 			watch,
 			generateFileHashes,
 			generateKoreaderHashes: koreaderHashes,
+			useSeriesCoverImage,
 		}),
-		[processMetadata, watch, generateFileHashes, koreaderHashes],
+		[processMetadata, watch, generateFileHashes, koreaderHashes, useSeriesCoverImage],
 	)
 
 	const handleProcessMetadataChange = useCallback(() => {
@@ -79,6 +91,16 @@ export default function ScannerOptInFeatures({ onDidChange }: Props) {
 		}
 	}, [form, koreaderHashes, params, onDidChange])
 
+	const handleUseSeriesCoverImageChange = useCallback(() => {
+		form.setValue('useSeriesCoverImage', !useSeriesCoverImage)
+		if (onDidChange) {
+			onDidChange({
+				...params,
+				useSeriesCoverImage: !useSeriesCoverImage,
+			})
+		}
+	}, [form, useSeriesCoverImage, params, onDidChange])
+
 	const { t } = useTranslate()
 
 	return (
@@ -118,6 +140,15 @@ export default function ScannerOptInFeatures({ onDidChange }: Props) {
 					checked={koreaderHashes}
 					onClick={handleGenerateKoreaderHashesChange}
 					{...form.register('generateKoreaderHashes')}
+				/>
+
+				<NewCard.CheckboxRow
+					id="useSeriesCoverImage"
+					label={t(getKey('useSeriesCoverImage.label'))}
+					description={t(getKey('useSeriesCoverImage.description'))}
+					checked={useSeriesCoverImage}
+					onClick={handleUseSeriesCoverImageChange}
+					{...form.register('useSeriesCoverImage')}
 				/>
 			</NewCard>
 

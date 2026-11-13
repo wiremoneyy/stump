@@ -46,6 +46,7 @@ This task doesn't do much itself aside from discovery operations. Stump will rec
 1. New and **valid** media
 2. Updated media (based on last modified time on disk)
 3. Missing media
+4. A [series cover file](/docs/guides/fundamentals/thumbnails#series-cover-files) (e.g. `cover.jpg`) in the series root, if the option is enabled. This is only used as a thumbnail source and is never treated as media
 
 These discoveries are then queued separately to be handled in an isolated manner - they are added to the **front** of the main task queue.
 
@@ -116,6 +117,10 @@ There are two different hashing options available in Stump. They serve different
 2. A KoReader-compatible hash, used exclusively for KoReader compatibility. See the [KoReader integration](/docs/guides/integrations/koreader) guide for more information.
 
 If you don't care about either of these features, you can disable hashing entirely to save on processing time.
+
+### Series Cover Files
+
+When the `Use cover image from series folder` option is enabled (the default), Stump will use an image named `cover`, `folder` or `poster` in each series folder as the series thumbnail instead of the first page of the first book. See the [thumbnails](/docs/guides/fundamentals/thumbnails#series-cover-files) guide for the accepted names and how the thumbnail is chosen.
 
 ### File Conversion
 

@@ -196,6 +196,7 @@ export const buildSchema = (
 			}),
 		oneshotsDirectory: z.string().nullish(), // will be relative to path, if provided
 		processMetadata: z.boolean().default(true),
+		useSeriesCoverImage: z.boolean().default(true),
 		scanAfterPersist: z.boolean().default(true),
 		tags: z
 			.array(
@@ -237,6 +238,7 @@ export const formDefaults = (
 	path: library?.path || '',
 	oneshotsDirectory: library?.config.oneshotsDirectory || null,
 	processMetadata: library?.config.processMetadata ?? true,
+	useSeriesCoverImage: library?.config.useSeriesCoverImage ?? true,
 	scanAfterPersist: true,
 	tags: library?.tags?.map((t) => ({ label: t.name, value: t.name.toLowerCase() })),
 	thumbnailConfig: intoFormThumbnailConfig(library?.config.thumbnailConfig),

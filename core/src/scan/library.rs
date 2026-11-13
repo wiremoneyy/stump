@@ -24,8 +24,9 @@ use crate::{
 	database::SQLITE_BIND_LIMIT,
 	event::{self, CreatedOrUpdatedManyMedia},
 	image::thumbnail::{
-		bump_media_thumbnail_fallbacks, PlaceholderGenerationJobConfig,
-		PlaceholderGenerationJobScope, ThumbnailGenerationJobParams,
+		bump_media_thumbnail_fallbacks, sync_series_cover_thumbnail,
+		PlaceholderGenerationJobConfig, PlaceholderGenerationJobScope, SeriesCoverFile,
+		SeriesCoverSyncOutcome, SeriesCoverSyncParams, ThumbnailGenerationJobParams,
 	},
 	job::{
 		error::JobError, CoreJobOutput, JobContext, JobExecuteLog, JobLifecycle,
@@ -101,6 +102,12 @@ pub struct LibraryScanJob {
 	pending_dir_mtimes: Arc<Mutex<Vec<(String, u64)>>>,
 	/// A map of series paths to their ids, loaded during init and used to avoid db trips
 	series_id_by_path: Arc<Mutex<HashMap<String, String>>>,
+	/// A map of series ids to their stored thumbnail paths, loaded during init and used to
+	/// reconcile series cover files without a db trip per series
+	series_thumbnail_by_id: Arc<Mutex<HashMap<String, Option<String>>>>,
+	/// The ids of series whose thumbnail was invalidated by a series cover file change and
+	/// need a thumbnail generation job once the scan completes
+	pending_cover_thumbnails: Arc<Mutex<Vec<String>>>,
 }
 
 impl LibraryScanJob {
@@ -113,6 +120,53 @@ impl LibraryScanJob {
 			dir_mtimes: Arc::new(HashMap::new()),
 			pending_dir_mtimes: Arc::new(Mutex::new(vec![])),
 			series_id_by_path: Arc::new(Mutex::new(HashMap::new())),
+			series_thumbnail_by_id: Arc::new(Mutex::new(HashMap::new())),
+			pending_cover_thumbnails: Arc::new(Mutex::new(vec![])),
+		}
+	}
+
+	/// Reconcile the thumbnail of a series with the cover image file found in its root (if any).
+	/// Failures are logged and never fail the scan.
+	async fn sync_series_cover(
+		&self,
+		ctx: &JobContext,
+		series_id: &str,
+		series_cover: Option<SeriesCoverFile>,
+	) -> Result<bool, String> {
+		let Some(config) = self.config.as_ref() else {
+			return Ok(false);
+		};
+		let current_thumbnail = self
+			.series_thumbnail_by_id
+			.lock()
+			.ok()
+			.and_then(|map| map.get(series_id).cloned().flatten());
+
+		let outcome = sync_series_cover_thumbnail(
+			ctx.conn(),
+			ctx.config(),
+			SeriesCoverSyncParams {
+				series_id,
+				current_thumbnail: current_thumbnail.as_deref(),
+				// Note: When disabled, we pass no cover so that previously applied covers revert
+				cover: series_cover.filter(|_| config.use_series_cover_image),
+				thumbnail_config: config.thumbnail_config.as_ref(),
+				process_colors_without_config: config
+					.process_thumbnail_colors_even_without_config,
+			},
+		)
+		.await
+		.map_err(|e| e.to_string())?;
+
+		match outcome {
+			SeriesCoverSyncOutcome::Unchanged => Ok(false),
+			SeriesCoverSyncOutcome::Updated => Ok(true),
+			SeriesCoverSyncOutcome::NeedsGeneration => {
+				if let Ok(mut pending) = self.pending_cover_thumbnails.lock() {
+					pending.push(series_id.to_string());
+				}
+				Ok(true)
+			},
 		}
 	}
 
@@ -214,20 +268,30 @@ impl JobLifecycle for LibraryScanJob {
 		);
 		self.dir_mtimes = Arc::new(stored_dir_mtimes);
 
-		let loaded_series_ids = series::Entity::find()
+		let loaded_series = series::Entity::find()
 			.select_only()
-			.columns(series::SeriesIdentSelect::columns())
+			.columns([
+				series::Column::Id,
+				series::Column::Path,
+				series::Column::ThumbnailPath,
+			])
 			.filter(series::Column::LibraryId.eq(self.id.clone()))
-			.into_model::<series::SeriesIdentSelect>()
+			.into_tuple::<(String, String, Option<String>)>()
 			.all(ctx.conn())
 			.await
-			.unwrap_or_default()
-			.into_iter()
-			.map(|s| (s.path, s.id))
-			.collect::<HashMap<String, String>>();
-		tracing::debug!(count = loaded_series_ids.len(), "preloaded series ids");
+			.unwrap_or_default();
+		tracing::debug!(count = loaded_series.len(), "preloaded series ids");
+		let mut loaded_series_ids = HashMap::with_capacity(loaded_series.len());
+		let mut loaded_series_thumbnails = HashMap::with_capacity(loaded_series.len());
+		for (id, path, thumbnail_path) in loaded_series {
+			loaded_series_thumbnails.insert(id.clone(), thumbnail_path);
+			loaded_series_ids.insert(path, id);
+		}
 		if let Ok(mut map) = self.series_id_by_path.lock() {
 			*map = loaded_series_ids;
+		}
+		if let Ok(mut map) = self.series_thumbnail_by_id.lock() {
+			*map = loaded_series_thumbnails;
 		}
 
 		ctx.report_progress(JobProgress::msg("Performing task discovery"));
@@ -364,6 +428,31 @@ impl JobLifecycle for LibraryScanJob {
 			_ => {
 				tracing::debug!("No thumbnail generation job will be enqueued");
 			},
+		}
+
+		let pending_cover_thumbnails = self
+			.pending_cover_thumbnails
+			.lock()
+			.map(|mut v| v.drain(..).collect::<Vec<_>>())
+			.unwrap_or_default();
+		if let (Some(options), false) = (
+			self.config
+				.as_ref()
+				.and_then(|o| o.thumbnail_config.clone()),
+			pending_cover_thumbnails.is_empty(),
+		) {
+			tracing::debug!(
+				count = pending_cover_thumbnails.len(),
+				"Enqueuing thumbnail generation for series with changed cover files"
+			);
+			let params =
+				ThumbnailGenerationJobParams::series(pending_cover_thumbnails, false);
+			if let Err(e) = ctx
+				.enqueue(StumpJob::thumbnail_generation(options, params))
+				.await
+			{
+				tracing::error!(?e, "Failed to enqueue series cover thumbnail follow-up");
+			}
 		}
 
 		let process_even_without_config = self
@@ -718,6 +807,7 @@ impl JobLifecycle for LibraryScanJob {
 					skipped_files,
 					observed_dir_mtimes,
 					previous_oneshot_entries,
+					series_cover,
 				} = match walk_result {
 					Ok(walked_series) => walked_series,
 					Err(core_error) => {
@@ -804,6 +894,20 @@ impl JobLifecycle for LibraryScanJob {
 					output.updated_series += deleted_series;
 					// ^ not _strictly_ update but think it is largely acceptable
 					logs.extend(conversion_logs);
+				}
+
+				match self.sync_series_cover(ctx, &series_id, series_cover).await {
+					Ok(true) => output.updated_series += 1,
+					Ok(false) => {},
+					Err(error) => {
+						tracing::warn!(?error, %series_id, "Failed to apply series cover file");
+						logs.push(
+							JobExecuteLog::warn(&format!(
+								"Failed to apply series cover file: {error}"
+							))
+							.with_ctx(series_path_str.clone()),
+						);
+					},
 				}
 
 				subtasks = chain_optional_iter(

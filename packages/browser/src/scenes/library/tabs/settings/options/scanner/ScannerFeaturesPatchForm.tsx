@@ -28,9 +28,14 @@ export default function ScannerFeaturesPatchForm() {
 			watch,
 			generateFileHashes,
 			generateKoreaderHashes,
+			useSeriesCoverImage,
 		}: Pick<
 			CreateOrUpdateLibrarySchema,
-			'processMetadata' | 'watch' | 'generateFileHashes' | 'generateKoreaderHashes'
+			| 'processMetadata'
+			| 'watch'
+			| 'generateFileHashes'
+			| 'generateKoreaderHashes'
+			| 'useSeriesCoverImage'
 		>) => {
 			patch({
 				config: {
@@ -38,6 +43,7 @@ export default function ScannerFeaturesPatchForm() {
 					processMetadata,
 					watch,
 					generateKoreaderHashes,
+					useSeriesCoverImage,
 				},
 				scanAfterPersist: false,
 			})

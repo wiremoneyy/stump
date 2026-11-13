@@ -8,14 +8,15 @@ use models::{
 	entity::{library, library_config, media, series},
 	shared::enums::FileStatus,
 };
-use sea_orm::{prelude::*, sea_query::Query, Condition, UpdateResult};
+use sea_orm::{prelude::*, sea_query::Query, Condition, QuerySelect, UpdateResult};
 use serde::{Deserialize, Serialize};
 
 use crate::{
 	event,
 	image::{
-		bump_media_thumbnail_fallbacks, PlaceholderGenerationJobConfig,
-		PlaceholderGenerationJobScope, ThumbnailGenerationJobParams,
+		bump_media_thumbnail_fallbacks, sync_series_cover_thumbnail,
+		PlaceholderGenerationJobConfig, PlaceholderGenerationJobScope,
+		SeriesCoverSyncOutcome, SeriesCoverSyncParams, ThumbnailGenerationJobParams,
 	},
 	job::{
 		error::JobError, CoreJobOutput, JobContext, JobLifecycle, JobOutputExt,
@@ -48,6 +49,9 @@ pub struct SeriesScanJob {
 	pub path: String,
 	pub config: Option<library_config::Model>,
 	pub options: ScanOptions,
+	/// Whether the series thumbnail was invalidated by a series cover file change and needs
+	/// a thumbnail generation job once the scan completes
+	pending_cover_thumbnail: bool,
 }
 
 impl SeriesScanJob {
@@ -57,6 +61,7 @@ impl SeriesScanJob {
 			path,
 			config: None,
 			options: options.unwrap_or_default(),
+			pending_cover_thumbnail: false,
 		}
 	}
 
@@ -159,6 +164,7 @@ impl JobLifecycle for SeriesScanJob {
 			seen_files,
 			ignored_files,
 			skipped_files,
+			series_cover,
 			..
 		} = walk_series(
 			PathBuf::from(self.path.clone()).as_path(),
@@ -189,6 +195,40 @@ impl JobLifecycle for SeriesScanJob {
 		output.total_files = seen_files + ignored_files;
 		output.ignored_files = ignored_files;
 		output.skipped_files = skipped_files;
+
+		if let Some(config) = self.config.as_ref() {
+			let current_thumbnail = series::Entity::find()
+				.select_only()
+				.column(series::Column::ThumbnailPath)
+				.filter(series::Column::Id.eq(self.id.clone()))
+				.into_tuple::<Option<String>>()
+				.one(ctx.conn())
+				.await?
+				.flatten();
+			let result = sync_series_cover_thumbnail(
+				ctx.conn(),
+				ctx.config(),
+				SeriesCoverSyncParams {
+					series_id: &self.id,
+					current_thumbnail: current_thumbnail.as_deref(),
+					// Note: When disabled, we pass no cover so that previously applied covers revert
+					cover: series_cover.filter(|_| config.use_series_cover_image),
+					thumbnail_config: config.thumbnail_config.as_ref(),
+					process_colors_without_config: config
+						.process_thumbnail_colors_even_without_config,
+				},
+			)
+			.await;
+			match result {
+				Ok(SeriesCoverSyncOutcome::NeedsGeneration) => {
+					self.pending_cover_thumbnail = true;
+				},
+				Ok(_) => {},
+				Err(error) => {
+					tracing::warn!(?error, "Failed to apply series cover file");
+				},
+			}
+		}
 
 		let tasks = VecDeque::from(chain_optional_iter(
 			[],
@@ -244,6 +284,22 @@ impl JobLifecycle for SeriesScanJob {
 					tracing::error!(
 						?e,
 						"Failed to enqueue thumbnail generation follow-up"
+					);
+				}
+			},
+			Some(options) if self.pending_cover_thumbnail => {
+				tracing::trace!(
+					"Series cover thumbnail generation job should be enqueued"
+				);
+				let params =
+					ThumbnailGenerationJobParams::series(vec![self.id.clone()], false);
+				if let Err(e) = ctx
+					.enqueue(StumpJob::thumbnail_generation(options, params))
+					.await
+				{
+					tracing::error!(
+						?e,
+						"Failed to enqueue series cover thumbnail follow-up"
 					);
 				}
 			},

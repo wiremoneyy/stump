@@ -762,6 +762,10 @@
           "koreaderHashes": {
             "label": "KoReader-Compatible Hashes",
             "description": "If using KoReader, generate additional hashes in the format it expects"
+          },
+          "useSeriesCoverImage": {
+            "label": "Use Cover Image From Series Folder",
+            "description": "Use a cover, folder, or poster image in each series folder as the series thumbnail"
           }
         },
         "organization": {
@@ -858,6 +862,7 @@
             "processMetadata": "Process Metadata",
             "generateFileHashes": "Generate File Hashes",
             "generateKoreaderHashes": "Generate KoReader Hashes",
+            "useSeriesCoverImage": "Use Series Folder Cover Image",
             "scaleEvenlyByFactor": "Evenly Scale",
             "exact": "Exact Size",
             "scaleDimension": "Explicitly Sized"

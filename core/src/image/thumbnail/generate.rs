@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use chrono::Utc;
 use futures::{stream::FuturesUnordered, StreamExt};
 use models::{
-	entity::{library, media, series},
+	entity::{library, library_config, media, series},
 	shared::{
 		image::ImageMetadata,
 		image_processor_options::{ImageProcessorOptions, SupportedImageFormat},
@@ -22,8 +22,12 @@ use crate::{
 		is_generated_thumbnail,
 		process::ImageProcessor,
 		processor::{GenericImageProcessor, WebpProcessor},
-		thumbnail::placeholder::{
-			generate_image_metadata, generate_image_metadata_from_bytes,
+		thumbnail::{
+			placeholder::{generate_image_metadata, generate_image_metadata_from_bytes},
+			series_cover::{
+				find_series_cover_file, generate_thumbnail_from_series_cover,
+				remove_stale_generated_thumbnail, SeriesCoverFile,
+			},
 		},
 		PlaceholderGenerationJob, PlaceholderGenerationOutput, ThumbnailGenerationJob,
 		ThumbnailGenerationOutput,
@@ -382,6 +386,51 @@ async fn generate_series_thumbnail(
 		}
 	}
 
+	// A cover image file in the series folder takes precedence over the first book
+	if let Some(cover) = find_enabled_series_cover(series, ctx).await {
+		match generate_thumbnail_from_series_cover(
+			&series.id,
+			&cover,
+			&options.core_config,
+			options.image_options.clone(),
+		)
+		.await
+		{
+			Ok((thumbnail, thumbnail_path, thumbnail_metadata)) => {
+				series::Entity::update_many()
+					.filter(series::Column::Id.eq(&series.id))
+					.col_expr(
+						series::Column::ThumbnailPath,
+						Expr::value(Some(thumbnail_path.to_string_lossy().to_string())),
+					)
+					.col_expr(
+						series::Column::ThumbnailMeta,
+						Expr::value(thumbnail_metadata),
+					)
+					.col_expr(
+						series::Column::UpdatedAt,
+						Expr::value(Some(DateTimeWithTimeZone::from(Utc::now()))),
+					)
+					.exec(ctx.conn())
+					.await?;
+				remove_stale_generated_thumbnail(
+					series.thumbnail_path.as_deref(),
+					Some(&thumbnail_path),
+				)
+				.await;
+				return Ok((thumbnail, thumbnail_path, true));
+			},
+			Err(error) => {
+				tracing::warn!(
+					?error,
+					series_id = %series.id,
+					cover_path = ?cover.path,
+					"Failed to generate thumbnail from series cover file, falling back to the first book"
+				);
+			},
+		}
+	}
+
 	let first_book = media::Entity::find()
 		.select_only()
 		.columns(media::MediaThumbSelect::columns())
@@ -396,7 +445,7 @@ async fn generate_series_thumbnail(
 		return Err(ThumbnailGenerateError::NothingToGenerate);
 	};
 
-	copy_thumbnail_to_entity(
+	let result = copy_thumbnail_to_entity(
 		&series.id,
 		first_book,
 		ctx,
@@ -418,7 +467,40 @@ async fn generate_series_thumbnail(
 				)
 		},
 	)
-	.await
+	.await?;
+
+	// e.g. the series previously used a cover file thumbnail which no longer applies
+	remove_stale_generated_thumbnail(series.thumbnail_path.as_deref(), Some(&result.1))
+		.await;
+
+	Ok(result)
+}
+
+/// Find the cover image file for a series, if the series' library has the feature enabled
+async fn find_enabled_series_cover(
+	series: &series::SeriesThumbSelect,
+	ctx: &JobContext,
+) -> Option<SeriesCoverFile> {
+	let library_id = series.library_id.as_ref()?;
+	let is_enabled = library_config::Entity::find()
+		.select_only()
+		.column(library_config::Column::UseSeriesCoverImage)
+		.filter(library_config::Column::LibraryId.eq(library_id))
+		.into_tuple::<bool>()
+		.one(ctx.conn())
+		.await
+		.inspect_err(|error| {
+			tracing::error!(?error, "Failed to load library config for series cover");
+		})
+		.ok()
+		.flatten()
+		.unwrap_or(false);
+
+	if is_enabled {
+		find_series_cover_file(Path::new(&series.path)).await
+	} else {
+		None
+	}
 }
 
 #[tracing::instrument(skip_all)]

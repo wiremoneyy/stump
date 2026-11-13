@@ -17,6 +17,7 @@ use walkdir::{DirEntry, WalkDir};
 use crate::{
 	error::CoreError,
 	fs_utils::PathUtils,
+	image::{SeriesCoverFile, SeriesCoverPicker},
 	scan::{
 		options::{BookVisitOperation, ScanOptions},
 		utils::{
@@ -343,6 +344,9 @@ pub struct WalkedSeries {
 	/// A list of entries which were oneshots but after a config change are no longer considered
 	/// oneshots (i.e., the oneshots_directory changed)
 	pub previous_oneshot_entries: Vec<PreviousOneshotEntry>,
+	/// The highest priority cover image file (e.g. `cover.jpg`) found directly in the series
+	/// root, if any. This is never treated as media, only as a thumbnail source
+	pub series_cover: Option<SeriesCoverFile>,
 }
 
 impl WalkedSeries {
@@ -380,10 +384,11 @@ pub async fn walk_series(
 
 	let path_buf = path.to_path_buf();
 	let walk_start = std::time::Instant::now();
-	let (valid_entries, ignored_entries, observed_dir_mtimes): (
+	let (valid_entries, ignored_entries, observed_dir_mtimes, series_cover): (
 		Vec<DirEntry>,
 		Vec<DirEntry>,
 		HashMap<String, u64>,
+		Option<SeriesCoverFile>,
 	) = tokio::task::spawn_blocking(move || {
 		let mut walkdir = WalkDir::new(&path_buf);
 		if let Some(num) = max_depth {
@@ -397,6 +402,7 @@ pub async fn walk_series(
 		let mut valid = Vec::new();
 		let mut ignored = Vec::new();
 		let mut observed = HashMap::new();
+		let mut cover_picker = SeriesCoverPicker::default();
 
 		loop {
 			match it.next() {
@@ -451,9 +457,16 @@ pub async fn walk_series(
 						continue;
 					}
 
-					if ignore_rules.is_match(entry_path)
-						|| entry_path.is_default_ignored()
-					{
+					let is_ignored_by_rules = ignore_rules.is_match(entry_path);
+
+					// Only files directly in the series root are considered as cover files. Note
+					// that cover images are always default ignored (images are not media), so they
+					// still land in the ignored bucket below and are never ingested
+					if entry.depth() == 1 && !is_ignored_by_rules {
+						cover_picker.offer(entry_path);
+					}
+
+					if is_ignored_by_rules || entry_path.is_default_ignored() {
 						ignored.push(entry);
 					} else {
 						valid.push(entry);
@@ -462,7 +475,11 @@ pub async fn walk_series(
 			}
 		}
 
-		(valid, ignored, observed)
+		let series_cover = cover_picker
+			.finish()
+			.map(SeriesCoverFile::from_path_blocking);
+
+		(valid, ignored, observed, series_cover)
 	})
 	.await
 	.map_err(|e| CoreError::InternalError(format!("Series walk task panicked: {e}")))?;
@@ -619,6 +636,7 @@ pub async fn walk_series(
 		series_is_missing: false,
 		observed_dir_mtimes,
 		previous_oneshot_entries,
+		series_cover,
 	})
 }
 
