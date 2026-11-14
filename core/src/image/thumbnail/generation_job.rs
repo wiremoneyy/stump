@@ -10,11 +10,11 @@ use sea_orm::{prelude::*, QuerySelect, QueryTrait};
 use crate::{
 	database::{chunk_vec_into, SQLITE_BIND_LIMIT},
 	image::thumbnail::generate::{
-		bump_series_thumbnail_fallbacks, safely_generate_batch, GenerateImageSource,
+		bump_series_thumbnail_fallbacks, refresh_series_cover, safely_generate_batch, GenerateImageSource,
 		GenerateThumbnailOptions,
 	},
 	job::{
-		error::JobError, JobContext, JobLifecycle, JobOutputExt, JobProgress,
+		error::JobError, JobContext, JobExecuteLog, JobLifecycle, JobOutputExt, JobProgress,
 		JobTaskOutput, WorkingState,
 	},
 };
@@ -30,6 +30,9 @@ pub enum ThumbnailGenerationJobScope {
 	Books(Vec<Id>),
 	Libraries(Vec<Id>),
 	Series(Vec<Id>),
+	/// Only reconcile series thumbnails with cover files in the series folders (e.g. `cover.webp`)
+	/// for every series in the library. Books are not touched.
+	SeriesCoversInLibrary(Id),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -74,19 +77,29 @@ impl ThumbnailGenerationJobParams {
 	pub fn series(ids: Vec<Id>, force_regenerate: bool) -> Self {
 		Self::new(ThumbnailGenerationJobScope::Series(ids), force_regenerate)
 	}
+
+	pub fn series_covers_in_library(library_id: Id) -> Self {
+		Self::new(
+			ThumbnailGenerationJobScope::SeriesCoversInLibrary(library_id),
+			false,
+		)
+	}
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct ThumbnailGenerationInit {
 	pub media_ids: Vec<Id>,
 	pub series_ids: Vec<Id>,
 	pub library_ids: Vec<Id>,
+	#[serde(default)]
+	pub cover_series_ids: Vec<Id>,
 }
 
 #[derive(Serialize, Deserialize)]
 pub enum ThumbnailGenerationTask {
 	Media(Vec<Id>),
 	Series(Vec<Id>),
+	SeriesCovers(Vec<Id>),
 	Library(Vec<Id>),
 }
 
@@ -158,6 +171,10 @@ impl JobLifecycle for ThumbnailGenerationJob {
 				"Thumbnail generation job, Series({:?}), force_regenerate: {}",
 				ids, self.params.force_regenerate
 			)),
+			ThumbnailGenerationJobScope::SeriesCoversInLibrary(id) => Some(format!(
+				"Series cover scan job, SeriesCoversInLibrary({})",
+				id
+			)),
 		}
 	}
 
@@ -215,6 +232,7 @@ impl JobLifecycle for ThumbnailGenerationJob {
 					media_ids,
 					series_ids,
 					library_ids,
+					..Default::default()
 				}
 			},
 			ThumbnailGenerationJobScope::BooksInSeries(id) => {
@@ -234,30 +252,52 @@ impl JobLifecycle for ThumbnailGenerationJob {
 					media_ids,
 					series_ids: vec![id.clone()],
 					library_ids: vec![],
+					..Default::default()
 				}
 			},
 			ThumbnailGenerationJobScope::Books(media_ids) => ThumbnailGenerationInit {
 				media_ids: media_ids.clone(),
 				series_ids: vec![],
 				library_ids: vec![],
+				..Default::default()
 			},
 			ThumbnailGenerationJobScope::Libraries(library_ids) => {
 				ThumbnailGenerationInit {
 					media_ids: vec![],
 					series_ids: vec![],
 					library_ids: library_ids.clone(),
+					..Default::default()
 				}
 			},
 			ThumbnailGenerationJobScope::Series(series_ids) => ThumbnailGenerationInit {
 				media_ids: vec![],
 				series_ids: series_ids.clone(),
 				library_ids: vec![],
+				..Default::default()
+			},
+			ThumbnailGenerationJobScope::SeriesCoversInLibrary(id) => {
+				let cover_series_ids = series::Entity::find()
+					.select_only()
+					.column(series::Column::Id)
+					.filter(series::Column::LibraryId.eq(id))
+					.into_tuple::<String>()
+					.all(ctx.conn())
+					.await
+					.map_err(|e| JobError::InitFailed(e.to_string()))?;
+				ThumbnailGenerationInit {
+					cover_series_ids,
+					..Default::default()
+				}
 			},
 		};
 
 		let tasks: Vec<ThumbnailGenerationTask> =
 			chunk_vec_into(init_params.media_ids, ThumbnailGenerationTask::Media)
 				.into_iter()
+				.chain(chunk_vec_into(
+					init_params.cover_series_ids,
+					ThumbnailGenerationTask::SeriesCovers,
+				))
 				.chain(chunk_vec_into(
 					init_params.series_ids,
 					ThumbnailGenerationTask::Series,
@@ -319,6 +359,44 @@ impl JobLifecycle for ThumbnailGenerationJob {
 				.await;
 				output.update(sub_output);
 				logs.extend(sub_logs);
+			},
+			ThumbnailGenerationTask::SeriesCovers(series_ids) => {
+				let series = series::Entity::find()
+					.select_only()
+					.columns(series::SeriesThumbSelect::columns())
+					.filter(series::Column::Id.is_in(series_ids))
+					.into_model::<series::SeriesThumbSelect>()
+					.all(ctx.conn())
+					.await
+					.map_err(|e| JobError::TaskFailed(e.to_string()))?;
+
+				let task_count = series.len() as i32;
+				ctx.report_progress(JobProgress::msg("Scanning series covers"));
+				ctx.report_progress(JobProgress::subtask_position(0, task_count));
+
+				// Note: Processed sequentially on purpose, this is meant to be gentle on small servers
+				for (position, series) in series.iter().enumerate() {
+					let options = GenerateThumbnailOptions {
+						image_options: self.options.clone(),
+						core_config: ctx.config().clone(),
+						force_regen: false,
+					};
+					output.visited_files += 1;
+					match refresh_series_cover(series, ctx, options).await {
+						Ok(true) => output.generated_thumbnails += 1,
+						Ok(false) => output.skipped_files += 1,
+						Err(error) => logs.push(
+							JobExecuteLog::error(format!(
+								"Failed to apply series cover: {error}"
+							))
+							.with_ctx(series.path.clone()),
+						),
+					}
+					ctx.report_progress(JobProgress::subtask_position(
+						(position + 1) as i32,
+						task_count,
+					));
+				}
 			},
 			ThumbnailGenerationTask::Series(series_ids) => {
 				let fallback_series_ids = series_ids.clone();

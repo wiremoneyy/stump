@@ -1062,6 +1062,43 @@ impl LibraryMutation {
 		Ok(true)
 	}
 
+	/// Scan only the series cover files (e.g. `cover.webp`) of a library and apply them as series
+	/// thumbnails. This is independent of a library scan and does not touch books.
+	#[graphql(guard = "PermissionGuard::one(UserPermission::ManageLibrary)")]
+	async fn scan_library_series_covers(
+		&self,
+		ctx: &Context<'_>,
+		id: ID,
+	) -> Result<bool> {
+		let AuthContext { user, .. } = ctx.data::<AuthContext>()?;
+		let core = ctx.data::<CoreContext>()?;
+
+		let (library, config) = library::Entity::find_for_user(user)
+			.filter(library::Column::Id.eq(id.to_string()))
+			.find_also_related(library_config::Entity)
+			.one(core.conn.as_ref())
+			.await?
+			.ok_or("Library not found")?;
+		let config = config.ok_or("Library config not found")?;
+
+		if !config.use_series_cover_image {
+			return Err("Enable 'use series cover image' for this library first".into());
+		}
+
+		if let Err(error) = core
+			.enqueue(StumpJob::thumbnail_generation(
+				config.thumbnail_config.unwrap_or_default(),
+				ThumbnailGenerationJobParams::series_covers_in_library(library.id),
+			))
+			.await
+		{
+			tracing::error!(?error, "Failed to enqueue series cover scan job");
+			return Err(error.into());
+		}
+
+		Ok(true)
+	}
+
 	#[graphql(guard = "PermissionGuard::one(UserPermission::ManageLibrary)")]
 	async fn process_library_thumbnails(
 		&self,

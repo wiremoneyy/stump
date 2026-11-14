@@ -6,6 +6,7 @@ import DeleteLibraryThumbnails from './DeleteLibraryThumbnails'
 import LibraryThumbnailSelector from './LibraryThumbnailSelector'
 import ProcessLibraryThumbnails from './ProcessLibraryThumbnails'
 import RegenerateThumbnails from './RegenerateThumbnails'
+import ScanSeriesCovers from './ScanSeriesCovers'
 
 export default function ThumbnailManagementSection() {
 	const { t, translate } = useTranslate()
@@ -14,6 +15,7 @@ export default function ThumbnailManagementSection() {
 		<NewCard label={translate('shared.common.management')}>
 			<LibraryThumbnailSelector />
 			<RegenerateThumbnails />
+			<ScanSeriesCovers />
 			<ProcessLibraryThumbnails />
 			<DeleteLibraryThumbnails />
 		</NewCard>

@@ -26,7 +26,8 @@ use crate::{
 			placeholder::{generate_image_metadata, generate_image_metadata_from_bytes},
 			series_cover::{
 				find_series_cover_file, generate_thumbnail_from_series_cover,
-				remove_stale_generated_thumbnail, SeriesCoverFile,
+				remove_stale_generated_thumbnail, resolve_series_cover_action,
+				series_cover_thumbnail_tag, SeriesCoverAction, SeriesCoverFile,
 			},
 		},
 		PlaceholderGenerationJob, PlaceholderGenerationOutput, ThumbnailGenerationJob,
@@ -474,6 +475,91 @@ async fn generate_series_thumbnail(
 		.await;
 
 	Ok(result)
+}
+
+/// Reconcile a single series thumbnail with the cover file in its folder, independent of any
+/// library scan. Returns `true` if the thumbnail was changed. Manually uploaded thumbnails are
+/// never touched. Generation is done inline, so callers should limit concurrency.
+#[tracing::instrument(skip_all)]
+pub async fn refresh_series_cover(
+	series: &series::SeriesThumbSelect,
+	ctx: &JobContext,
+	options: GenerateThumbnailOptions,
+) -> Result<bool, ThumbnailGenerateError> {
+	let cover = find_enabled_series_cover(series, ctx).await;
+	let current = series.thumbnail_path.as_deref().map(Path::new);
+	let current_modified = match current {
+		Some(path) if series_cover_thumbnail_tag(path).is_some() => {
+			fs::metadata(path).await.and_then(|m| m.modified()).ok()
+		},
+		_ => None,
+	};
+
+	match resolve_series_cover_action(current, current_modified, cover.as_ref()) {
+		SeriesCoverAction::Keep => Ok(false),
+		SeriesCoverAction::Apply => {
+			let Some(cover) = cover else {
+				return Ok(false);
+			};
+			let (_, thumbnail_path, thumbnail_metadata) =
+				generate_thumbnail_from_series_cover(
+					&series.id,
+					&cover,
+					&options.core_config,
+					options.image_options.clone(),
+				)
+				.await?;
+			series::Entity::update_many()
+				.filter(series::Column::Id.eq(&series.id))
+				.col_expr(
+					series::Column::ThumbnailPath,
+					Expr::value(Some(thumbnail_path.to_string_lossy().to_string())),
+				)
+				.col_expr(
+					series::Column::ThumbnailMeta,
+					Expr::value(thumbnail_metadata),
+				)
+				.col_expr(
+					series::Column::UpdatedAt,
+					Expr::value(Some(DateTimeWithTimeZone::from(Utc::now()))),
+				)
+				.exec(ctx.conn())
+				.await?;
+			remove_stale_generated_thumbnail(
+				series.thumbnail_path.as_deref(),
+				Some(&thumbnail_path),
+			)
+			.await;
+			Ok(true)
+		},
+		SeriesCoverAction::Revert => {
+			series::Entity::update_many()
+				.filter(series::Column::Id.eq(&series.id))
+				.col_expr(
+					series::Column::ThumbnailPath,
+					Expr::value(Option::<String>::None),
+				)
+				.col_expr(
+					series::Column::ThumbnailMeta,
+					Expr::value(Option::<ImageMetadata>::None),
+				)
+				.exec(ctx.conn())
+				.await?;
+			remove_stale_generated_thumbnail(series.thumbnail_path.as_deref(), None).await;
+			let cleared = series::SeriesThumbSelect {
+				id: series.id.clone(),
+				path: series.path.clone(),
+				thumbnail_path: None,
+				thumbnail_meta: None,
+				library_id: series.library_id.clone(),
+			};
+			// Falls back to the first book. If there are no books yet this is a no-op
+			match generate_series_thumbnail(&cleared, ctx, options).await {
+				Ok(_) | Err(ThumbnailGenerateError::NothingToGenerate) => Ok(true),
+				Err(error) => Err(error),
+			}
+		},
+	}
 }
 
 /// Find the cover image file for a series, if the series' library has the feature enabled
