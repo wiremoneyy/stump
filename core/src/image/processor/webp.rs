@@ -26,11 +26,7 @@ impl ImageProcessor for WebpProcessor {
 			image = resized_image;
 		}
 
-		let encoder = Encoder::from_image(&image)
-			.map_err(|err| ImageProcessorError::WebpEncode(err.to_string()))?;
-		let encoded_webp = encoder.encode(100f32);
-
-		let mut result = encoded_webp.as_bytes().to_vec();
+		let mut result = WebpProcessor::encode(image)?;
 		result.shrink_to_fit(); // free excess capacity
 
 		Ok(result)
@@ -68,15 +64,36 @@ impl ImageProcessor for WebpProcessor {
 		let resized_image =
 			image.resize(width, height, image::imageops::FilterType::Lanczos3);
 
-		let encoder = Encoder::from_image(&resized_image)
-			.map_err(|err| ImageProcessorError::WebpEncode(err.to_string()))?;
-		let encoded_webp = encoder.encode(100f32);
-
-		Ok(encoded_webp.as_bytes().to_vec())
+		WebpProcessor::encode(resized_image)
 	}
 }
 
+/// The largest width or height the WebP format can store
+const WEBP_MAX_DIMENSION: u32 = 16383;
+
 impl WebpProcessor {
+	fn encode(mut image: DynamicImage) -> Result<Vec<u8>, ImageProcessorError> {
+		// Note: Long-strip pages (e.g. webtoons) can be taller than WebP allows, so they are
+		// scaled down to fit, keeping the aspect ratio
+		let (width, height) = image.dimensions();
+		if width > WEBP_MAX_DIMENSION || height > WEBP_MAX_DIMENSION {
+			image = image.resize(
+				WEBP_MAX_DIMENSION,
+				WEBP_MAX_DIMENSION,
+				imageops::FilterType::Triangle,
+			);
+		}
+
+		let encoder = Encoder::from_image(&image)
+			.map_err(|err| ImageProcessorError::WebpEncode(err.to_string()))?;
+		// Note: `Encoder::encode` panics if the encoder rejects the image
+		let encoded_webp = encoder
+			.encode_simple(false, 100f32)
+			.map_err(|err| ImageProcessorError::WebpEncode(format!("{err:?}")))?;
+
+		Ok(encoded_webp.as_bytes().to_vec())
+	}
+
 	fn resize_image(
 		image: DynamicImage,
 		resize_method: ImageResizeMethod,
@@ -338,6 +355,42 @@ mod tests {
 
 		assert_eq!(dimensions.0, 100);
 		assert_eq!(dimensions.1, 100);
+	}
+
+	#[test]
+	fn test_generate_webp_from_image_taller_than_webp_allows() {
+		let tall = DynamicImage::new_rgb8(8, WEBP_MAX_DIMENSION + 1000);
+		let mut png = std::io::Cursor::new(Vec::new());
+		tall.write_to(&mut png, image::ImageFormat::Png).unwrap();
+		let options = ImageProcessorOptions {
+			resize_method: None,
+			format: SupportedImageFormat::Webp,
+			quality: None,
+			page: None,
+		};
+
+		let buffer = WebpProcessor::generate(png.get_ref(), options)
+			.expect("Failed to generate image buffer");
+
+		let dimensions = image::load_from_memory(&buffer)
+			.expect("Failed to load image from buffer")
+			.dimensions();
+		assert_eq!(dimensions.1, WEBP_MAX_DIMENSION);
+	}
+
+	#[test]
+	fn test_generate_webp_with_empty_dimension_is_an_error() {
+		let options = ImageProcessorOptions {
+			resize_method: Some(ImageResizeMethod::Exact(ExactDimensionResize {
+				width: 0,
+				height: 100,
+			})),
+			format: SupportedImageFormat::Webp,
+			quality: None,
+			page: None,
+		};
+
+		assert!(WebpProcessor::generate(&get_test_webp_data(), options).is_err());
 	}
 
 	fn get_test_webp_data() -> Vec<u8> {
