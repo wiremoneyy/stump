@@ -30,11 +30,15 @@ fn write_image(path: &Path, color: [u8; 3]) {
 /// bumps the mtime of a file into the future so it is newer than any thumbnail written during
 /// the test, simulating a cover file being replaced
 fn touch_future(path: &Path) {
+	set_mtime(path, SystemTime::now() + Duration::from_secs(60));
+}
+
+fn set_mtime(path: &Path, modified: SystemTime) {
 	std::fs::File::options()
 		.write(true)
 		.open(path)
 		.unwrap()
-		.set_modified(SystemTime::now() + Duration::from_secs(60))
+		.set_modified(modified)
 		.unwrap();
 }
 
@@ -156,6 +160,18 @@ async fn cover_file_changes_are_detected() {
 		replaced.updated_at > initial.updated_at,
 		"URL should be busted"
 	);
+
+	// replaced in place by a file with an older mtime (e.g. a copy which kept its mtime)
+	write_image(&cover, [0, 0, 255]);
+	set_mtime(&cover, SystemTime::now() - Duration::from_secs(3600));
+	let output = library.scan().await;
+	assert_eq!(output.updated_series, 1, "{output:#?}");
+	let replaced = library.series_named(SERIES).await;
+	assert_eq!(
+		std::fs::read(replaced.thumbnail_path.as_deref().unwrap()).unwrap(),
+		std::fs::read(&cover).unwrap()
+	);
+	library.assert_rescan_is_noop().await;
 
 	// highest priority removed, the next candidate takes over even though it is older
 	std::fs::remove_file(&cover).unwrap();

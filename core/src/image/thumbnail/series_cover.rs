@@ -15,7 +15,7 @@
 
 use std::{
 	path::{Path, PathBuf},
-	time::SystemTime,
+	time::{Duration, SystemTime},
 };
 
 use chrono::Utc;
@@ -56,6 +56,10 @@ pub const SERIES_COVER_FILE_EXTENSIONS: [&str; 6] =
 const PASSTHROUGH_EXTENSIONS: [&str; 1] = ["avif"];
 
 const COVER_THUMBNAIL_TAG_PREFIX: &str = "seriescover-";
+
+/// How far apart the mtime of a cover file and the thumbnail derived from it may be while still
+/// being considered the same. This allows for filesystems with coarse timestamps (e.g. FAT)
+const MTIME_TOLERANCE: Duration = Duration::from_secs(2);
 
 /// Returns the priority of a file name as a series cover candidate, where a lower value is a
 /// higher priority. Returns `None` if the file name is not a cover candidate.
@@ -226,9 +230,16 @@ pub fn resolve_series_cover_action(
 	match (cover, current_tag) {
 		(Some(cover), Some(current_tag)) => {
 			let same_source = cover.source_tag().as_deref() == Some(current_tag);
+			// Note: Thumbnails derived from a cover file are stamped with the mtime of that file
+			// (see `match_cover_mtime`), so any difference means the cover was replaced. This
+			// includes replacements which are older, e.g. a copied file which kept its mtime.
+			// The tolerance covers filesystems with coarse timestamps
 			let is_up_to_date = match (current_thumbnail_modified, cover.modified) {
 				(Some(thumbnail_mtime), Some(cover_mtime)) => {
-					cover_mtime <= thumbnail_mtime
+					let difference = cover_mtime
+						.duration_since(thumbnail_mtime)
+						.unwrap_or_else(|e| e.duration());
+					difference < MTIME_TOLERANCE
 				},
 				// If we can't read the cover mtime, don't thrash regenerating every scan
 				(Some(_), None) => true,
@@ -274,6 +285,7 @@ pub async fn generate_thumbnail_from_series_cover(
 			&cover_data,
 		)
 		.await?;
+		match_cover_mtime(&path, cover).await;
 		return Ok((cover_data, path, None));
 	}
 
@@ -291,6 +303,7 @@ pub async fn generate_thumbnail_from_series_cover(
 		&thumbnail,
 	)
 	.await?;
+	match_cover_mtime(&path, cover).await;
 
 	let metadata = match generate_image_metadata_from_bytes(thumbnail.clone()).await {
 		Ok(metadata) => Some(metadata),
@@ -313,6 +326,25 @@ async fn write_thumbnail(
 	let path = thumbnails_dir.join(file_name);
 	fs::write(&path, data).await?;
 	Ok(path)
+}
+
+/// Stamp a thumbnail with the mtime of the cover file it was derived from, which is how later
+/// scans detect that the cover file was replaced (see [`resolve_series_cover_action`])
+async fn match_cover_mtime(thumbnail_path: &Path, cover: &SeriesCoverFile) {
+	let Some(modified) = cover.modified else {
+		return;
+	};
+	let path = thumbnail_path.to_path_buf();
+	let result = spawn_blocking(move || {
+		std::fs::File::options()
+			.write(true)
+			.open(path)?
+			.set_modified(modified)
+	})
+	.await;
+	if !matches!(result, Ok(Ok(()))) {
+		tracing::warn!(?result, ?thumbnail_path, "Failed to set thumbnail mtime");
+	}
 }
 
 /// Remove a previously generated thumbnail file if it is no longer the one in use. Thumbnails
@@ -423,6 +455,7 @@ where
 				.join(format!("{file_stem}.{}", cover.extension()));
 			fs::create_dir_all(core_config.thumbnails_directory()).await?;
 			fs::copy(&cover.path, &dest_path).await?;
+			match_cover_mtime(&dest_path, &cover).await;
 
 			let metadata = if process_colors_without_config && cover.is_processable() {
 				match generate_image_metadata(&dest_path).await {
@@ -764,11 +797,11 @@ mod tests {
 			resolve_series_cover_action(
 				Some(current),
 				at(100),
-				Some(&cover("cover.jpg", at(10)))
+				Some(&cover("cover.jpg", at(101)))
 			),
-			SeriesCoverAction::Keep
+			SeriesCoverAction::Keep,
+			"coarse filesystem timestamps should be tolerated"
 		);
-		// same mtime is considered up to date
 		assert_eq!(
 			resolve_series_cover_action(
 				Some(current),
@@ -788,6 +821,15 @@ mod tests {
 				Some(current),
 				at(100),
 				Some(&cover("cover.jpg", at(200)))
+			),
+			SeriesCoverAction::Apply
+		);
+		// e.g. replaced by a copied file which kept its (older) mtime
+		assert_eq!(
+			resolve_series_cover_action(
+				Some(current),
+				at(100),
+				Some(&cover("cover.jpg", at(10)))
 			),
 			SeriesCoverAction::Apply
 		);

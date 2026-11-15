@@ -26,7 +26,7 @@ mod scheduler;
 
 use chrono::{DateTime, Utc};
 pub use context::{ApalisWorkerState, JobContext};
-pub use dispatch::{dispatch_job, CoreJobOutput, JobOutputExt, StumpJob};
+pub use dispatch::{dispatch_job, run_job_inline, CoreJobOutput, JobOutputExt, StumpJob};
 use error::JobError;
 pub use models::shared::enums::JobStatus;
 pub use progress::*;

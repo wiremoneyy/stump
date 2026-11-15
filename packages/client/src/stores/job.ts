@@ -19,7 +19,10 @@ export const useJobStore = createWithEqualityFn<JobStore>(
 		addJob: (id) =>
 			set((state) =>
 				produce(state, (draft) => {
-					draft.jobs[id] = { id }
+					// The server runs one job at a time, so a job starting means any other job we
+					// are still tracking has finished and we missed the event for it (e.g. this
+					// tab was in the background and fell behind)
+					draft.jobs = { [id]: { id } }
 				}),
 			),
 		jobs: {} as Record<JobID, JobUpdate>,

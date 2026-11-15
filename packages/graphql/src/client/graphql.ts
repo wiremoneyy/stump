@@ -2271,6 +2271,11 @@ export type Mutation = {
    * and update the database accordingly.
    */
   scanLibrary: Scalars['Boolean']['output'];
+  /**
+   * Scan only the series cover files (e.g. `cover.webp`) of a library and apply them as series
+   * thumbnails. This is independent of a library scan and does not touch books.
+   */
+  scanLibrarySeriesCovers: Scalars['Boolean']['output'];
   scanSeries: Scalars['Boolean']['output'];
   sendAttachmentEmail: SendAttachmentEmailOutput;
   /** Send a message in a discussion */
@@ -2920,6 +2925,11 @@ export type MutationRespondToBookClubInvitationArgs = {
 export type MutationScanLibraryArgs = {
   id: Scalars['ID']['input'];
   options?: InputMaybe<Scalars['JSON']['input']>;
+};
+
+
+export type MutationScanLibrarySeriesCoversArgs = {
+  id: Scalars['ID']['input'];
 };
 
 
@@ -7057,6 +7067,13 @@ export type RegenerateThumbnailsMutationVariables = Exact<{
 
 
 export type RegenerateThumbnailsMutation = { __typename?: 'Mutation', generateLibraryThumbnails: boolean };
+
+export type ScanLibrarySeriesCoversMutationVariables = Exact<{
+  id: Scalars['ID']['input'];
+}>;
+
+
+export type ScanLibrarySeriesCoversMutation = { __typename?: 'Mutation', scanLibrarySeriesCovers: boolean };
 
 export type SeriesSettingsSceneQueryVariables = Exact<{
   id: Scalars['ID']['input'];
@@ -14790,6 +14807,11 @@ export const RegenerateThumbnailsDocument = new TypedDocumentString(`
   generateLibraryThumbnails(id: $id, forceRegenerate: $forceRegenerate)
 }
     `) as unknown as TypedDocumentString<RegenerateThumbnailsMutation, RegenerateThumbnailsMutationVariables>;
+export const ScanLibrarySeriesCoversDocument = new TypedDocumentString(`
+    mutation ScanLibrarySeriesCovers($id: ID!) {
+  scanLibrarySeriesCovers(id: $id)
+}
+    `) as unknown as TypedDocumentString<ScanLibrarySeriesCoversMutation, ScanLibrarySeriesCoversMutationVariables>;
 export const SeriesSettingsSceneDocument = new TypedDocumentString(`
     query SeriesSettingsScene($id: ID!) {
   seriesById(id: $id) {

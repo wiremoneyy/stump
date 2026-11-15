@@ -1,6 +1,7 @@
 use crate::data::CoreContext;
 use async_graphql::{Context, Result, Subscription};
 use stump_core::CoreEvent;
+use tokio::sync::broadcast::error::RecvError;
 
 #[derive(Default)]
 pub struct EventSubscription;
@@ -22,8 +23,17 @@ impl EventSubscription {
 				return;
 			};
 
-			while let Ok(event) = rx.recv().await {
-				yield Ok(event);
+			loop {
+				match rx.recv().await {
+					Ok(event) => yield Ok(event),
+					// Note: A slow client (e.g. a backgrounded browser tab) can fall behind during
+					// a busy job. Ending the stream here would leave that client without any
+					// events until it reloads, so we skip what was missed and carry on
+					Err(RecvError::Lagged(skipped)) => {
+						tracing::warn!(skipped, "Event subscriber lagged, skipping missed events");
+					},
+					Err(RecvError::Closed) => break,
+				}
 			}
 		}
 	}

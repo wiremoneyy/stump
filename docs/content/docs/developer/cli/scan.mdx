@@ -1,0 +1,27 @@
+---
+title: Scan
+description: Scan libraries from the command line
+---
+
+The `scan` command scans your libraries, including any follow-up jobs a scan would normally kick off (e.g. thumbnail generation). It runs entirely within the CLI process, so the server does not need to be running and no browser is involved. This makes it a good fit for scripts and cron jobs.
+
+## Scanning all libraries
+
+```bash copy
+./stump scan
+```
+
+## Scanning specific libraries
+
+Provide the name or ID of each library you want to scan:
+
+```bash copy
+./stump scan --library "Comics" --library "Manga"
+```
+
+The command exits with a non-zero status if a library could not be found or any job failed.
+
+<Callout type="info">
+	Jobs started from the CLI are recorded in the job history like any other, but the web app will
+	not show live progress for them.
+</Callout>

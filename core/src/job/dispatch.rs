@@ -1,7 +1,8 @@
 use std::{fmt::Debug, sync::Arc};
 
-use apalis::prelude::Data;
+use apalis::prelude::{Data, MessageQueue};
 use async_graphql::Union;
+use futures::FutureExt;
 use models::shared::{enums::JobStatus, image_processor_options::ImageProcessorOptions};
 use serde::{de, Deserialize, Serialize};
 use uuid::Uuid;
@@ -276,4 +277,32 @@ pub async fn dispatch_job(
 	}
 
 	Ok(())
+}
+
+/// Run a job, and any follow-up jobs it enqueues (e.g. thumbnail generation after a scan), to
+/// completion on the current task. This is for contexts which do not have a running worker,
+/// e.g. the CLI. Returns the name and error of each job which failed.
+pub async fn run_job_inline(
+	state: Arc<ApalisWorkerState>,
+	job: StumpJob,
+) -> Vec<(&'static str, String)> {
+	let mut storage = state.job_storage.clone();
+	let mut failures = vec![];
+	let mut next = Some(job);
+
+	while let Some(job) = next {
+		let name = job.name();
+		if let Err(error) = dispatch_job(job, Data::new(Arc::clone(&state))).await {
+			failures.push((name, error.to_string()));
+		}
+		// Note: The storage is in-memory, so a queued follow-up is ready on the first poll
+		// and an empty queue would otherwise wait forever
+		next = storage
+			.dequeue()
+			.now_or_never()
+			.and_then(Result::ok)
+			.flatten();
+	}
+
+	failures
 }
