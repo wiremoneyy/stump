@@ -1,3 +1,4 @@
+pub(crate) mod duplicates;
 pub(crate) mod media;
 pub(crate) mod oneshot;
 pub(crate) mod series;

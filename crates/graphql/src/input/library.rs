@@ -73,6 +73,8 @@ pub struct LibraryConfigInput {
 	pub process_thumbnail_colors_even_without_config: bool,
 	#[graphql(default = true)]
 	pub use_series_cover_image: bool,
+	#[graphql(default)]
+	pub clean_names: bool,
 	pub default_reading_dir: ReadingDirection,
 	pub default_reading_mode: ReadingMode,
 	pub default_reading_image_scale_fit: ReadingImageScaleFit,
@@ -97,6 +99,7 @@ impl LibraryConfigInput {
 			thumbnail_config,
 			process_thumbnail_colors_even_without_config,
 			use_series_cover_image,
+			clean_names,
 			default_reading_dir,
 			default_reading_mode,
 			default_reading_image_scale_fit,
@@ -126,6 +129,7 @@ impl LibraryConfigInput {
 				process_thumbnail_colors_even_without_config,
 			),
 			use_series_cover_image: Set(use_series_cover_image),
+			clean_names: Set(clean_names),
 			default_reading_dir: Set(default_reading_dir),
 			default_reading_mode: Set(default_reading_mode),
 			default_reading_image_scale_fit: Set(default_reading_image_scale_fit),
@@ -227,6 +231,7 @@ pub struct PatchLibraryConfigInput {
 	pub thumbnail_config: MaybeUndefined<ImageProcessorOptions>,
 	pub process_thumbnail_colors_even_without_config: Option<bool>,
 	pub use_series_cover_image: Option<bool>,
+	pub clean_names: Option<bool>,
 	pub default_reading_dir: Option<ReadingDirection>,
 	pub default_reading_mode: Option<ReadingMode>,
 	pub default_reading_image_scale_fit: Option<ReadingImageScaleFit>,
@@ -254,6 +259,7 @@ impl PatchLibraryConfigInput {
 			thumbnail_config,
 			process_thumbnail_colors_even_without_config,
 			use_series_cover_image,
+			clean_names,
 			default_reading_dir,
 			default_reading_mode,
 			default_reading_image_scale_fit,
@@ -318,6 +324,9 @@ impl PatchLibraryConfigInput {
 			use_series_cover_image: use_series_cover_image
 				.map(Set)
 				.unwrap_or(Unchanged(model.use_series_cover_image)),
+			clean_names: clean_names
+				.map(Set)
+				.unwrap_or(Unchanged(model.clean_names)),
 			default_reading_dir: default_reading_dir
 				.map(Set)
 				.unwrap_or(Unchanged(model.default_reading_dir)),

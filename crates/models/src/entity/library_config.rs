@@ -57,6 +57,10 @@ pub struct Model {
 	/// folder as the series thumbnail
 	#[sea_orm(default_value = "true")]
 	pub use_series_cover_image: bool,
+	/// Whether to clean up the names of series and books derived from the filesystem by
+	/// removing the `_` and `-` characters used in place of spaces
+	#[sea_orm(default_value = "false")]
+	pub clean_names: bool,
 	#[sea_orm(column_type = "Json", nullable)]
 	#[graphql(skip)]
 	pub ignore_rules: Option<IgnoreRules>,
@@ -161,6 +165,10 @@ impl ActiveModelBehavior for ActiveModel {
 
 		if self.use_series_cover_image.is_not_set() {
 			self.use_series_cover_image = Set(true);
+		}
+
+		if self.clean_names.is_not_set() {
+			self.clean_names = Set(false);
 		}
 
 		Ok(self)

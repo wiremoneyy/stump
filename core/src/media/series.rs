@@ -1,4 +1,7 @@
-use crate::{metadata::series::ProcessedSeriesMetadata, CoreError, CoreResult};
+use crate::{
+	fs_utils::clean_name, metadata::series::ProcessedSeriesMetadata, CoreError,
+	CoreResult,
+};
 use models::{
 	entity::{series, series_metadata},
 	shared::enums::FileStatus,
@@ -9,6 +12,7 @@ use std::path::{Path, PathBuf};
 pub struct SeriesBuilder {
 	path: PathBuf,
 	library_id: String,
+	clean_names: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -22,7 +26,14 @@ impl SeriesBuilder {
 		Self {
 			path: path.to_path_buf(),
 			library_id: library_id.to_string(),
+			clean_names: false,
 		}
+	}
+
+	/// Sets whether the series name should be cleaned up, see [`clean_name`]
+	pub fn clean_names(mut self, clean_names: bool) -> Self {
+		self.clean_names = clean_names;
+		self
 	}
 
 	pub fn build(self) -> CoreResult<BuiltSeries> {
@@ -47,7 +58,11 @@ impl SeriesBuilder {
 
 		let series = series::ActiveModel {
 			path: Set(path_str),
-			name: Set(file_name),
+			name: Set(if self.clean_names {
+				clean_name(&file_name)
+			} else {
+				file_name
+			}),
 			library_id: Set(Some(self.library_id)),
 			status: Set(FileStatus::Ready),
 			..Default::default()

@@ -19,6 +19,7 @@ type Props = {
 			| 'generateFileHashes'
 			| 'generateKoreaderHashes'
 			| 'useSeriesCoverImage'
+			| 'cleanNames'
 		>,
 	) => void
 }
@@ -28,17 +29,24 @@ export default function ScannerOptInFeatures({ onDidChange }: Props) {
 	const ctx = useLibraryManagementSafe()
 	const isCreating = !ctx?.library
 
-	const [processMetadata, watch, generateFileHashes, koreaderHashes, useSeriesCoverImage] =
-		useWatch({
-			control: form.control,
-			name: [
-				'processMetadata',
-				'watch',
-				'generateFileHashes',
-				'generateKoreaderHashes',
-				'useSeriesCoverImage',
-			],
-		})
+	const [
+		processMetadata,
+		watch,
+		generateFileHashes,
+		koreaderHashes,
+		useSeriesCoverImage,
+		cleanNames,
+	] = useWatch({
+		control: form.control,
+		name: [
+			'processMetadata',
+			'watch',
+			'generateFileHashes',
+			'generateKoreaderHashes',
+			'useSeriesCoverImage',
+			'cleanNames',
+		],
+	})
 
 	const params = useMemo(
 		() => ({
@@ -47,8 +55,9 @@ export default function ScannerOptInFeatures({ onDidChange }: Props) {
 			generateFileHashes,
 			generateKoreaderHashes: koreaderHashes,
 			useSeriesCoverImage,
+			cleanNames,
 		}),
-		[processMetadata, watch, generateFileHashes, koreaderHashes, useSeriesCoverImage],
+		[processMetadata, watch, generateFileHashes, koreaderHashes, useSeriesCoverImage, cleanNames],
 	)
 
 	const handleProcessMetadataChange = useCallback(() => {
@@ -101,6 +110,16 @@ export default function ScannerOptInFeatures({ onDidChange }: Props) {
 		}
 	}, [form, useSeriesCoverImage, params, onDidChange])
 
+	const handleCleanNamesChange = useCallback(() => {
+		form.setValue('cleanNames', !cleanNames)
+		if (onDidChange) {
+			onDidChange({
+				...params,
+				cleanNames: !cleanNames,
+			})
+		}
+	}, [form, cleanNames, params, onDidChange])
+
 	const { t } = useTranslate()
 
 	return (
@@ -149,6 +168,15 @@ export default function ScannerOptInFeatures({ onDidChange }: Props) {
 					checked={useSeriesCoverImage}
 					onClick={handleUseSeriesCoverImageChange}
 					{...form.register('useSeriesCoverImage')}
+				/>
+
+				<NewCard.CheckboxRow
+					id="cleanNames"
+					label={t(getKey('cleanNames.label'))}
+					description={t(getKey('cleanNames.description'))}
+					checked={cleanNames}
+					onClick={handleCleanNamesChange}
+					{...form.register('cleanNames')}
 				/>
 			</NewCard>
 

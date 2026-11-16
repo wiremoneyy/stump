@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::{
 	config::StumpConfig,
-	fs_utils::{FileParts, PathUtils},
+	fs_utils::{clean_name, FileParts, PathUtils},
 	media::processor::{process_file, MediaProcessorOptions},
 	CoreResult,
 };
@@ -57,6 +57,11 @@ pub async fn prepare_draft(
 		..
 	} = processed.path.as_path().file_parts();
 	let path_str = processed.path.to_str().unwrap_or_default().to_string();
+	let name = if library_config.clean_names {
+		clean_name(&file_stem)
+	} else {
+		file_stem
+	};
 
 	let (raw_size, last_modified_at) = processed.path.metadata().map(|m| {
 		let datetime: Option<DateTime<Utc>> = m.modified().ok().map(|t| t.into());
@@ -100,7 +105,7 @@ pub async fn prepare_draft(
 
 	let active_model = media::ActiveModel {
 		id: Set(id),
-		name: Set(file_stem),
+		name: Set(name),
 		size: Set(size),
 		extension: Set(extension),
 		pages: Set(pages),

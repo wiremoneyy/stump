@@ -39,6 +39,7 @@ mod m20261006_152724_journal_entries;
 mod m20261006_225247_reading_devices;
 mod m20261025_235745_drop_navigation_user_prefs;
 mod m20261113_000000_library_use_series_cover_image;
+mod m20261115_000000_library_clean_names;
 
 pub struct Migrator;
 
@@ -84,6 +85,7 @@ impl MigratorTrait for Migrator {
 			Box::new(m20261006_225247_reading_devices::Migration),
 			Box::new(m20261025_235745_drop_navigation_user_prefs::Migration),
 			Box::new(m20261113_000000_library_use_series_cover_image::Migration),
+			Box::new(m20261115_000000_library_clean_names::Migration),
 		]
 	}
 }

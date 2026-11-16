@@ -25,20 +25,29 @@ use crate::{
 };
 
 /// Builds a series from the given path
-async fn build_series(for_library: &str, path: &Path) -> CoreResult<BuiltSeries> {
+async fn build_series(
+	for_library: &str,
+	path: &Path,
+	clean_names: bool,
+) -> CoreResult<BuiltSeries> {
 	let path = path.to_path_buf();
 	let for_library = for_library.to_string();
 
 	// Spawn a blocking task to handle the IO-intensive operations:
-	spawn_blocking(move || SeriesBuilder::new(&path, &for_library).build())
-		.await
-		.map_err(|e| CoreError::Unknown(e.to_string()))?
+	spawn_blocking(move || {
+		SeriesBuilder::new(&path, &for_library)
+			.clean_names(clean_names)
+			.build()
+	})
+	.await
+	.map_err(|e| CoreError::Unknown(e.to_string()))?
 }
 
 /// Safely builds a series from a list of paths concurrently
 pub(crate) async fn safely_build_series(
 	for_library: &str,
 	paths: Vec<PathBuf>,
+	clean_names: bool,
 	config: Arc<StumpConfig>,
 	reporter: impl Fn(usize),
 ) -> (Vec<BuiltSeries>, Vec<JobExecuteLog>) {
@@ -78,7 +87,7 @@ pub(crate) async fn safely_build_series(
 		let for_library = for_library.to_string();
 		futures.push(Box::pin(async move {
 			tracing::trace!(?path, "Starting series build");
-			build_series(&for_library, &path)
+			build_series(&for_library, &path, clean_names)
 				.await
 				.map_err(|e| (e, path.clone()))
 		}));

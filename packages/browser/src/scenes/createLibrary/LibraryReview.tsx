@@ -158,6 +158,11 @@ export default function LibraryReview() {
 				/>
 
 				<ReviewItem
+					label={t(getLabelKey('cleanNames'))}
+					value={state.cleanNames ? translate('shared.common.yes') : translate('shared.common.no')}
+				/>
+
+				<ReviewItem
 					label={t(getLabelKey('convertRar'))}
 					value={
 						state.convertRarToZip ? translate('shared.common.yes') : translate('shared.common.no')

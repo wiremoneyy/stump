@@ -27,7 +27,7 @@ use crate::{
 	database::SQLITE_BIND_LIMIT,
 	error::{CoreError, CoreResult},
 	event::CreatedMedia,
-	fs_utils::{FileParts, PathUtils},
+	fs_utils::{clean_name, FileParts, PathUtils},
 	job::{error::JobError, JobContext, JobExecuteLog, JobProgress},
 	media::prepare::{prepare_draft, MediaDraft},
 	media::series::BuiltSeries,
@@ -60,6 +60,11 @@ async fn build_oneshot<P: AsRef<Path>>(
 	let FileParts {
 		file_stem: name, ..
 	} = path.file_parts();
+	let name = if library_config.clean_names {
+		clean_name(&name)
+	} else {
+		name
+	};
 
 	let id = Uuid::new_v4();
 	// ^ we set id early to share with book
@@ -518,6 +523,7 @@ pub(crate) async fn convert_to_oneshot_series(
 	old_series_id: &str,
 	media_rows: Vec<media::MediaIdentSelect>,
 	library_id: &str,
+	clean_names: bool,
 	worker_ctx: &JobContext,
 ) -> Result<OneshotOperationOutput, JobError> {
 	let mut output = OneshotOperationOutput::default();
@@ -581,8 +587,14 @@ pub(crate) async fn convert_to_oneshot_series(
 		let target_series_id = match existing.next() {
 			Some(id) => id,
 			None => {
-				let id =
-					create_oneshot_series_for(&txn, &path, &book.id, library_id).await?;
+				let id = create_oneshot_series_for(
+					&txn,
+					&path,
+					&book.id,
+					library_id,
+					clean_names,
+				)
+				.await?;
 				output.created_series += 1;
 				id
 			},
@@ -634,11 +646,13 @@ async fn create_oneshot_series_for<C: ConnectionTrait>(
 	path: &str,
 	media_id: &str,
 	library_id: &str,
+	clean_names: bool,
 ) -> Result<String, DbErr> {
 	let id = Uuid::new_v4().to_string();
 	let FileParts {
 		file_stem: name, ..
 	} = PathBuf::from(path).file_parts();
+	let name = if clean_names { clean_name(&name) } else { name };
 
 	series::ActiveModel {
 		id: Set(id.clone()),

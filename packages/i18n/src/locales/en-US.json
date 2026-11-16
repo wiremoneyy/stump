@@ -766,6 +766,10 @@
           "useSeriesCoverImage": {
             "label": "Use Cover Image From Series Folder",
             "description": "Use a cover, folder, or poster image in each series folder as the series thumbnail"
+          },
+          "cleanNames": {
+            "label": "Clean Up Names",
+            "description": "Remove the underscores and hyphens used in place of spaces when naming series and books, e.g. \"my-comic-name\" becomes \"my comic name\". If two series folders end up with the same name, only the one with the most books is kept in the library"
           }
         },
         "organization": {
@@ -863,6 +867,7 @@
             "generateFileHashes": "Generate File Hashes",
             "generateKoreaderHashes": "Generate KoReader Hashes",
             "useSeriesCoverImage": "Use Series Folder Cover Image",
+            "cleanNames": "Clean Up Names",
             "scaleEvenlyByFactor": "Evenly Scale",
             "exact": "Exact Size",
             "scaleDimension": "Explicitly Sized"

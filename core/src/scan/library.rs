@@ -24,7 +24,7 @@ use crate::{
 	database::SQLITE_BIND_LIMIT,
 	event::{self, CreatedOrUpdatedManyMedia},
 	image::thumbnail::{
-		bump_media_thumbnail_fallbacks, sync_series_cover_thumbnail,
+		bump_media_thumbnail_fallbacks, remove_thumbnails, sync_series_cover_thumbnail,
 		PlaceholderGenerationJobConfig, PlaceholderGenerationJobScope, SeriesCoverFile,
 		SeriesCoverSyncOutcome, SeriesCoverSyncParams, ThumbnailGenerationJobParams,
 	},
@@ -38,6 +38,10 @@ use crate::{
 		series::SeriesScanTask,
 		utils::{
 			build_ignore_rules,
+			duplicates::{
+				count_books_on_disk, find_duplicate_series, DuplicateSeries,
+				SeriesCandidate,
+			},
 			media::{
 				build_and_insert_media, handle_missing_media, handle_restored_media,
 				visit_and_update_media, MediaBuildOperation, MediaOperationOutput,
@@ -123,6 +127,122 @@ impl LibraryScanJob {
 			series_thumbnail_by_id: Arc::new(Mutex::new(HashMap::new())),
 			pending_cover_thumbnails: Arc::new(Mutex::new(vec![])),
 		}
+	}
+
+	/// Finds the series on disk which are duplicates of one another once their names
+	/// are cleaned, returning the ones with the fewest books so they can be dropped
+	async fn find_duplicate_series(
+		&self,
+		series_to_create: &[PathBuf],
+		series_to_visit: &[PathBuf],
+		ignore_rules: globset::GlobSet,
+		is_collection_based: bool,
+	) -> Result<Vec<DuplicateSeries>, JobError> {
+		let library_path = PathBuf::from(&self.path);
+		// Note: the library root may itself be a series, but it can never be a sibling of
+		// another series so it is never a duplicate
+		let paths = series_to_create
+			.iter()
+			.map(|path| (path.clone(), false))
+			.chain(series_to_visit.iter().map(|path| (path.clone(), true)))
+			.filter(|(path, _)| path != &library_path)
+			.collect::<Vec<_>>();
+
+		tokio::task::spawn_blocking(move || {
+			// We only need to hit the disk for series which share a name with another
+			let candidates = paths
+				.into_iter()
+				.map(|(path, exists)| SeriesCandidate {
+					path,
+					exists,
+					book_count: 0,
+				})
+				.collect::<Vec<_>>();
+			let mut contested = find_duplicate_series(candidates.clone())
+				.into_iter()
+				.flat_map(|d| [d.path, d.kept_path])
+				.collect::<Vec<_>>();
+			contested.sort();
+			contested.dedup();
+
+			let counted = candidates
+				.into_iter()
+				.filter(|c| contested.binary_search(&c.path).is_ok())
+				.map(|c| SeriesCandidate {
+					book_count: count_books_on_disk(
+						&c.path,
+						&ignore_rules,
+						is_collection_based,
+					),
+					..c
+				})
+				.collect();
+
+			find_duplicate_series(counted)
+		})
+		.await
+		.map_err(|e| JobError::InitFailed(e.to_string()))
+	}
+
+	/// Removes a duplicate series (and its books) from the database, if it was previously
+	/// scanned. The files on disk are never touched. Returns whether anything was removed.
+	async fn remove_duplicate_series(
+		&self,
+		ctx: &JobContext,
+		duplicate: &DuplicateSeries,
+	) -> Result<bool, JobError> {
+		let path = duplicate.path.to_string_lossy().to_string();
+
+		// Forget the stored mtimes so the folder is fully walked should it ever win out
+		scanned_directory::Entity::delete_many()
+			.filter(
+				sea_orm::Condition::any()
+					.add(scanned_directory::Column::Path.eq(path.clone()))
+					.add(
+						scanned_directory::Column::Path
+							.starts_with(format!("{path}{}", std::path::MAIN_SEPARATOR)),
+					),
+			)
+			.exec(ctx.conn())
+			.await?;
+
+		let series_id = self
+			.series_id_by_path
+			.lock()
+			.ok()
+			.and_then(|mut map| map.remove(&path));
+		let Some(series_id) = series_id else {
+			return Ok(false);
+		};
+		if let Ok(mut map) = self.series_thumbnail_by_id.lock() {
+			map.remove(&series_id);
+		}
+
+		let txn = ctx.conn().begin().await?;
+		let deleted_media_ids = media::Entity::delete_many()
+			.filter(media::Column::SeriesId.eq(series_id.clone()))
+			.exec_with_returning(&txn)
+			.await?
+			.into_iter()
+			.map(|m| m.id)
+			.collect::<Vec<_>>();
+		series::Entity::delete_many()
+			.filter(series::Column::Id.eq(series_id.clone()))
+			.exec(&txn)
+			.await?;
+		txn.commit().await?;
+
+		let thumbnail_ids = deleted_media_ids
+			.into_iter()
+			.chain([series_id])
+			.collect::<Vec<_>>();
+		if let Err(error) =
+			remove_thumbnails(&thumbnail_ids, &ctx.config().thumbnails_directory()).await
+		{
+			tracing::error!(?error, "Failed to remove thumbnails for duplicate series");
+		}
+
+		Ok(true)
 	}
 
 	/// Reconcile the thumbnail of a series with the cover image file found in its root (if any).
@@ -257,6 +377,8 @@ impl JobLifecycle for LibraryScanJob {
 		let is_collection_based = config.is_collection_based();
 		let ignore_rules = config.ignore_rules().build()?;
 		let oneshots_directory = config.oneshots_directory.clone();
+		let clean_names = config.clean_names;
+		let duplicate_ignore_rules = ignore_rules.clone();
 
 		self.config = Some(config);
 
@@ -296,9 +418,9 @@ impl JobLifecycle for LibraryScanJob {
 
 		ctx.report_progress(JobProgress::msg("Performing task discovery"));
 		let WalkedLibrary {
-			series_to_create,
+			mut series_to_create,
 			recovered_series,
-			series_to_visit,
+			mut series_to_visit,
 			missing_series,
 			library_is_missing,
 			ignored_directories,
@@ -343,6 +465,54 @@ impl JobLifecycle for LibraryScanJob {
 			));
 		}
 
+		let mut logs = vec![];
+		if clean_names {
+			ctx.report_progress(JobProgress::msg("Checking for duplicate series"));
+			let duplicates = self
+				.find_duplicate_series(
+					&series_to_create,
+					&series_to_visit,
+					duplicate_ignore_rules,
+					is_collection_based,
+				)
+				.await?;
+
+			for duplicate in duplicates {
+				series_to_create.retain(|path| path != &duplicate.path);
+				series_to_visit.retain(|path| path != &duplicate.path);
+
+				match self.remove_duplicate_series(ctx, &duplicate).await {
+					Ok(was_removed) => {
+						let outcome = if was_removed {
+							"removed from the library"
+						} else {
+							"skipped"
+						};
+						logs.push(
+							JobExecuteLog::warn(&format!(
+								"Duplicate series {outcome}: {:?} has {} book(s) while {:?} has {}",
+								duplicate.path,
+								duplicate.book_count,
+								duplicate.kept_path,
+								duplicate.kept_book_count,
+							))
+							.with_ctx(format!("Path: {:?}", duplicate.path)),
+						);
+					},
+					Err(error) => {
+						tracing::error!(?error, ?duplicate, "Failed to remove duplicate");
+						logs.push(
+							JobExecuteLog::error(format!(
+								"Failed to remove duplicate series: {:?}",
+								error.to_string()
+							))
+							.with_ctx(format!("Path: {:?}", duplicate.path)),
+						);
+					},
+				}
+			}
+		}
+
 		ctx.report_progress(JobProgress::msg("Building tasks"));
 
 		let init_task_input = InitTaskInput {
@@ -379,7 +549,7 @@ impl JobLifecycle for LibraryScanJob {
 		Ok(WorkingState {
 			output: Some(output),
 			tasks,
-			logs: vec![],
+			logs,
 		})
 	}
 
@@ -690,6 +860,7 @@ impl JobLifecycle for LibraryScanJob {
 					let (built_series, failure_logs) = safely_build_series(
 						&self.id,
 						series_to_create,
+						self.config.as_ref().is_some_and(|c| c.clean_names),
 						Arc::clone(&ctx.apalis_state.config),
 						|position| {
 							ctx.report_progress(JobProgress::subtask_position(
@@ -1009,7 +1180,14 @@ impl JobLifecycle for LibraryScanJob {
 							created_series: converted,
 							logs: convert_logs,
 							..
-						} = convert_to_oneshot_series(&old_id, media, &self.id, ctx).await?;
+						} = convert_to_oneshot_series(
+							&old_id,
+							media,
+							&self.id,
+							self.config.as_ref().is_some_and(|c| c.clean_names),
+							ctx,
+						)
+						.await?;
 						output.created_series += converted;
 						logs.extend(convert_logs);
 						if converted > 0 {

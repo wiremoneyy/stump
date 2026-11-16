@@ -1153,6 +1153,11 @@ type LibraryConfig {
 	folder as the series thumbnail
 	"""
 	useSeriesCoverImage: Boolean!
+	"""
+	Whether to clean up the names of series and books derived from the filesystem by
+	removing the `_` and `-` characters used in place of spaces
+	"""
+	cleanNames: Boolean!
 	libraryId: String
 	"""
 	the **relative path** to the directory where oneshots are stored,
@@ -1178,6 +1183,7 @@ input LibraryConfigInput {
 	thumbnailConfig: ImageProcessorOptionsInput
 	processThumbnailColorsEvenWithoutConfig: Boolean!
 	useSeriesCoverImage: Boolean! = true
+	cleanNames: Boolean! = false
 	defaultReadingDir: ReadingDirection!
 	defaultReadingMode: ReadingMode!
 	defaultReadingImageScaleFit: ReadingImageScaleFit!
@@ -2542,6 +2548,7 @@ input PatchLibraryConfigInput {
 	thumbnailConfig: ImageProcessorOptionsInput
 	processThumbnailColorsEvenWithoutConfig: Boolean
 	useSeriesCoverImage: Boolean
+	cleanNames: Boolean
 	defaultReadingDir: ReadingDirection
 	defaultReadingMode: ReadingMode
 	defaultReadingImageScaleFit: ReadingImageScaleFit
